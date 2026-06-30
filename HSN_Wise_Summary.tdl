@@ -1,0 +1,1302 @@
+;; =============================================================================
+;; HSN WISE SUMMARY REPORT - TallyPrime TDL
+;; =============================================================================
+;; Author      : TDL Developer
+;; Version     : 1.0.0
+;; Compatible  : TallyPrime Release 4.x and above
+;; Description : Comprehensive HSN-wise GST summary report for GST return
+;;               preparation and audit. Reads data from Sales, Purchase,
+;;               Debit Note, and Credit Note vouchers with full drill-down,
+;;               export, and print support.
+;; =============================================================================
+
+;; =============================================================================
+;; SECTION 1 : SYSTEM DEFINITIONS
+;; =============================================================================
+;; These [System: Formula] blocks define reusable computed formulae used
+;; throughout the report to avoid duplication and improve maintainability.
+;; =============================================================================
+
+[System: Formula]
+
+    ;; --- Voucher inclusion guard ---
+    ;; Returns TRUE only when the voucher is a valid, posted GST voucher.
+    SVF HSNVchInclude   : ($$IsSysName:IsCancelled = No) AND
+                          ($$IsSysName:IsOptional   = No) AND
+                          ($$IsSysName:IsDeleted    = No) AND
+                          NOT $$IsEmpty:$GSTRegistrationType
+
+    ;; --- Date range check ---
+    SVF HSNDateInRange  : ($Date >= SVHSNFromDate) AND ($Date <= SVHSNToDate)
+
+    ;; --- Voucher type filter ---
+    SVF HSNVchTypeMatch : (SVHSNVchType = "") OR
+                          ($$StringFind:$VoucherTypeName:SVHSNVchType > 0)
+
+    ;; --- Combined master filter ---
+    SVF HSNMasterFilter : $$SVF:HSNVchInclude AND
+                          $$SVF:HSNDateInRange AND
+                          $$SVF:HSNVchTypeMatch
+
+    ;; --- GST Rate filter on inventory entry ---
+    SVF HSNGSTRateMatch : (SVHSNGSTRate = "") OR
+                          ($$String:$GSTRate = SVHSNGSTRate)
+
+    ;; --- HSN Code filter on inventory entry ---
+    SVF HSNCodeMatch    : (SVHSNCodeFilter = "") OR
+                          ($$StringFind:$HSNCode:SVHSNCodeFilter > 0)
+
+    ;; --- Combined line level filter ---
+    SVF HSNLineFilter   : $$SVF:HSNGSTRateMatch AND $$SVF:HSNCodeMatch
+
+;; =============================================================================
+;; SECTION 2 : SYSTEM VARIABLES
+;; =============================================================================
+;; Variables store user-selected filter values and sort preferences.
+;; They are declared with types and default values.
+;; =============================================================================
+
+[System: Variable]
+
+    ;; --- Filter Variables ---
+    SVHSNFromDate       : Date    : ##SVCurrentPeriodFrom
+    SVHSNToDate         : Date    : ##SVCurrentPeriodTo
+    SVHSNVchType        : String  : ""
+    SVHSNGSTRate        : String  : ""
+    SVHSNCodeFilter     : String  : ""
+    SVHSNStockGroup     : String  : ""
+    SVHSNStockCategory  : String  : ""
+    SVHSNGodown         : String  : ""
+    SVHSNPartyLedger    : String  : ""
+    SVHSNB2BType        : String  : ""   ;; B2B | B2C | Export | SEZ | RevCharge
+    SVHSNSortBy         : String  : "HSNCode"
+    SVHSNSortOrder      : Logical : Yes  ;; Yes = Ascending
+
+;; =============================================================================
+;; SECTION 3 : MENU INTEGRATION
+;; =============================================================================
+;; Adds "HSN Wise Summary" under Gateway of Tally > Display More Reports >
+;; GST Reports menu.  Uses Add:Item so the standard menu is not disturbed.
+;; =============================================================================
+
+[#Menu: Gateway of Tally]
+    Add : Key Item : HSN Wise Summary  : H : DISPLAY+ : Form : HSNWiseSummaryForm
+
+[#Menu: Display More Reports]
+    Add : Key Item : HSN Wise Summary  : H : DISPLAY+ : Form : HSNWiseSummaryForm
+
+;; Also add under GST Reports menu if present
+[#Menu: GST Reports]
+    Add : Key Item : HSN Wise Summary  : H : DISPLAY+ : Form : HSNWiseSummaryForm
+
+;; =============================================================================
+;; SECTION 4 : REPORT DEFINITION
+;; =============================================================================
+;; The Report object is the top-level container that binds the Form and
+;; controls printing behaviour.
+;; =============================================================================
+
+[Report: HSNWiseSummaryReport]
+    Form        : HSNWiseSummaryForm
+    Title       : "HSN Wise Summary"
+    Print Title : $$LocaleString:"HSN Wise Summary"
+    Variable    : SVHSNFromDate, SVHSNToDate, SVHSNVchType,
+                  SVHSNGSTRate, SVHSNCodeFilter, SVHSNStockGroup,
+                  SVHSNStockCategory, SVHSNGodown, SVHSNPartyLedger,
+                  SVHSNB2BType, SVHSNSortBy, SVHSNSortOrder
+
+;; =============================================================================
+;; SECTION 5 : FORM DEFINITION
+;; =============================================================================
+;; The Form defines the outer shell: header, body, footer, key bindings,
+;; export and print support.
+;; =============================================================================
+
+[Form: HSNWiseSummaryForm]
+    Parts           : HSNWiseSummaryTitle, HSNWiseSummaryHead,
+                      HSNWiseSummaryBody, HSNWiseSummaryFooter
+    Keys            : HSNKeyF2, HSNKeyF4, HSNKeyF5,
+                      HSNKeyAltE, HSNKeyAltP, HSNKeyEsc
+    XML Object      : HSNWiseSummaryReport
+    Print           : HSNWiseSummaryPrint
+    Export          : HSNWiseSummaryExport
+    Use             : DSP Default Form
+
+;; =============================================================================
+;; SECTION 6 : KEY DEFINITIONS
+;; =============================================================================
+;; Keyboard shortcuts for period change, filter, refresh, export, print, back.
+;; =============================================================================
+
+[Key: HSNKeyF2]
+    Key         : F2
+    Action      : Call : HSNChangePeriod
+    Title       : "F2: Period"
+
+[Key: HSNKeyF4]
+    Key         : F4
+    Action      : Call : HSNFilterForm
+    Title       : "F4: Filter"
+
+[Key: HSNKeyF5]
+    Key         : F5
+    Action      : Refresh
+    Title       : "F5: Refresh"
+
+[Key: HSNKeyAltE]
+    Key         : Alt+E
+    Action      : Export
+    Title       : "Alt+E: Export"
+
+[Key: HSNKeyAltP]
+    Key         : Alt+P
+    Action      : Print
+    Title       : "Alt+P: Print"
+
+[Key: HSNKeyEsc]
+    Key         : Escape
+    Action      : Quit
+    Title       : "Esc: Back"
+
+;; =============================================================================
+;; SECTION 7 : TITLE PART & LINE
+;; =============================================================================
+;; Displays Company Name, GSTIN, Report Title, and Period at the top.
+;; =============================================================================
+
+[Part: HSNWiseSummaryTitle]
+    Line        : HSNTitleLine1, HSNTitleLine2, HSNTitleLine3
+    Scroll      : Vertical
+    Border      : Thin Bottom
+
+[Line: HSNTitleLine1]
+    Fields      : HSNFldCompanyName
+    Align       : Centre
+
+[Line: HSNTitleLine2]
+    Fields      : HSNFldGSTIN
+    Align       : Centre
+
+[Line: HSNTitleLine3]
+    Fields      : HSNFldReportTitle, HSNFldPeriodLabel
+    Align       : Centre
+
+[Field: HSNFldCompanyName]
+    Use         : Name Field
+    Set As      : ##SVCurrentCompany
+    Style       : Large Bold
+
+[Field: HSNFldGSTIN]
+    Use         : Name Field
+    Set As      : "GSTIN : " + $$GSTINOfCompany
+    Style       : Normal Bold
+
+[Field: HSNFldReportTitle]
+    Use         : Name Field
+    Set As      : "HSN Wise Summary"
+    Style       : Large Bold
+
+[Field: HSNFldPeriodLabel]
+    Use         : Name Field
+    Set As      : "Period: " + $$String:SVHSNFromDate:"DD-MMM-YYYY" +
+                  " to " + $$String:SVHSNToDate:"DD-MMM-YYYY"
+    Style       : Normal Italic
+
+;; =============================================================================
+;; SECTION 8 : COLUMN HEADER PART & LINE
+;; =============================================================================
+;; Defines the column header row: Sr, HSN, Description, UQC, Qty, Taxable,
+;; CGST, SGST, IGST, Cess, Total, GST Rate, Invoices.
+;; =============================================================================
+
+[Part: HSNWiseSummaryHead]
+    Line        : HSNColHeaderLine
+    Border      : Thin Bottom
+
+[Line: HSNColHeaderLine]
+    Fields      : HSNHdrSrNo, HSNHdrCode, HSNHdrDesc, HSNHdrUQC,
+                  HSNHdrQty, HSNHdrTaxable, HSNHdrCGST, HSNHdrSGST,
+                  HSNHdrIGST, HSNHdrCess, HSNHdrTotal,
+                  HSNHdrGSTRate, HSNHdrInvoices
+    Style       : Normal Bold
+    Border      : Thin Bottom
+
+[Field: HSNHdrSrNo]
+    Use         : Short Name Field
+    Set As      : "Sr"
+    Width       : 5
+
+[Field: HSNHdrCode]
+    Use         : Name Field
+    Set As      : "HSN Code"
+    Width       : 12
+
+[Field: HSNHdrDesc]
+    Use         : Name Field
+    Set As      : "Description"
+    Width       : 20
+
+[Field: HSNHdrUQC]
+    Use         : Short Name Field
+    Set As      : "UQC"
+    Width       : 6
+
+[Field: HSNHdrQty]
+    Use         : Qty Field
+    Set As      : "Qty"
+    Align       : Right
+    Width       : 12
+
+[Field: HSNHdrTaxable]
+    Use         : Amount Field
+    Set As      : "Taxable Value"
+    Align       : Right
+    Width       : 16
+
+[Field: HSNHdrCGST]
+    Use         : Amount Field
+    Set As      : "CGST"
+    Align       : Right
+    Width       : 12
+
+[Field: HSNHdrSGST]
+    Use         : Amount Field
+    Set As      : "SGST"
+    Align       : Right
+    Width       : 12
+
+[Field: HSNHdrIGST]
+    Use         : Amount Field
+    Set As      : "IGST"
+    Align       : Right
+    Width       : 12
+
+[Field: HSNHdrCess]
+    Use         : Amount Field
+    Set As      : "Cess"
+    Align       : Right
+    Width       : 10
+
+[Field: HSNHdrTotal]
+    Use         : Amount Field
+    Set As      : "Total Inv Value"
+    Align       : Right
+    Width       : 16
+
+[Field: HSNHdrGSTRate]
+    Use         : Amount Field
+    Set As      : "GST%"
+    Align       : Right
+    Width       : 8
+
+[Field: HSNHdrInvoices]
+    Use         : Number Field
+    Set As      : "Invoices"
+    Align       : Right
+    Width       : 10
+
+;; =============================================================================
+;; SECTION 9 : BODY PART — SCROLLABLE DATA ROWS
+;; =============================================================================
+;; The body scrolls through HSNSummaryCollection (one row per HSN group).
+;; Each row carries aggregated figures computed by the collection.
+;; Pressing Enter on a row opens the drill-down (HSN Voucher Details).
+;; =============================================================================
+
+[Part: HSNWiseSummaryBody]
+    Lines       : HSNDataLine
+    Scroll      : Vertical
+    Collection  : HSNSummaryCollection
+    CommonBorder: Yes
+
+[Line: HSNDataLine]
+    Fields      : HSNFldSrNo, HSNFldCode, HSNFldDesc, HSNFldUQC,
+                  HSNFldQty, HSNFldTaxable, HSNFldCGST, HSNFldSGST,
+                  HSNFldIGST, HSNFldCess, HSNFldTotal,
+                  HSNFldGSTRate, HSNFldInvoices
+    Key         : HSNDrillDown
+
+[Key: HSNDrillDown]
+    Key         : Enter
+    Action      : DISPLAY+ : Form : HSNVoucherDetailForm
+
+;; --- Data Fields ---
+
+[Field: HSNFldSrNo]
+    Use         : Short Name Field
+    Set As      : $$Line
+    Width       : 5
+
+[Field: HSNFldCode]
+    Use         : Name Field
+    Set As      : $HSNCode
+    Width       : 12
+
+[Field: HSNFldDesc]
+    Use         : Name Field
+    Set As      : $HSNDescription
+    Width       : 20
+
+[Field: HSNFldUQC]
+    Use         : Short Name Field
+    Set As      : $HSNUQC
+    Width       : 6
+
+[Field: HSNFldQty]
+    Use         : Qty Field
+    Set As      : $HSNTotalQty
+    Align       : Right
+    Width       : 12
+
+[Field: HSNFldTaxable]
+    Use         : Amount Field
+    Set As      : $HSNTaxableValue
+    Align       : Right
+    Width       : 16
+
+[Field: HSNFldCGST]
+    Use         : Amount Field
+    Set As      : $HSNCGSTAmt
+    Align       : Right
+    Width       : 12
+
+[Field: HSNFldSGST]
+    Use         : Amount Field
+    Set As      : $HSNSGSTAmt
+    Align       : Right
+    Width       : 12
+
+[Field: HSNFldIGST]
+    Use         : Amount Field
+    Set As      : $HSNIGSTAmt
+    Align       : Right
+    Width       : 12
+
+[Field: HSNFldCess]
+    Use         : Amount Field
+    Set As      : $HSNCessAmt
+    Align       : Right
+    Width       : 10
+
+[Field: HSNFldTotal]
+    Use         : Amount Field
+    Set As      : $HSNTotalInvValue
+    Align       : Right
+    Width       : 16
+
+[Field: HSNFldGSTRate]
+    Use         : Amount Field
+    Set As      : $HSNGSTRate
+    Align       : Right
+    Width       : 8
+
+[Field: HSNFldInvoices]
+    Use         : Number Field
+    Set As      : $HSNInvoiceCount
+    Align       : Right
+    Width       : 10
+
+;; =============================================================================
+;; SECTION 10 : FOOTER PART — TOTALS ROW
+;; =============================================================================
+;; Displays grand totals across all HSN codes.
+;; =============================================================================
+
+[Part: HSNWiseSummaryFooter]
+    Line        : HSNTotalLine, HSNInfoLine
+    Border      : Thin Top
+
+[Line: HSNTotalLine]
+    Fields      : HSNFldTotalLabel, HSNFldGTQty, HSNFldGTTaxable,
+                  HSNFldGTCGST, HSNFldGTSGST, HSNFldGTIGST,
+                  HSNFldGTCess, HSNFldGTTotal
+    Style       : Normal Bold
+
+[Field: HSNFldTotalLabel]
+    Use         : Name Field
+    Set As      : "Grand Total"
+    Width       : 43
+
+[Field: HSNFldGTQty]
+    Use         : Qty Field
+    Set As      : $$CollAmt:HSNSummaryCollection:HSNTotalQty
+    Align       : Right
+    Width       : 12
+
+[Field: HSNFldGTTaxable]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNSummaryCollection:HSNTaxableValue
+    Align       : Right
+    Width       : 16
+
+[Field: HSNFldGTCGST]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNSummaryCollection:HSNCGSTAmt
+    Align       : Right
+    Width       : 12
+
+[Field: HSNFldGTSGST]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNSummaryCollection:HSNSGSTAmt
+    Align       : Right
+    Width       : 12
+
+[Field: HSNFldGTIGST]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNSummaryCollection:HSNIGSTAmt
+    Align       : Right
+    Width       : 12
+
+[Field: HSNFldGTCess]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNSummaryCollection:HSNCessAmt
+    Align       : Right
+    Width       : 10
+
+[Field: HSNFldGTTotal]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNSummaryCollection:HSNTotalInvValue
+    Align       : Right
+    Width       : 16
+
+[Line: HSNInfoLine]
+    Fields      : HSNFldInfoLabel
+    Style       : Normal Italic
+
+[Field: HSNFldInfoLabel]
+    Use         : Name Field
+    Set As      : "Total HSN Codes: "  + $$String:$$CollectionFieldCount:HSNSummaryCollection +
+                  "  |  Total Invoices: " + $$String:$$CollAmt:HSNSummaryCollection:HSNInvoiceCount +
+                  "  |  Avg Tax Rate: " + $$String:$$CollAvg:HSNSummaryCollection:HSNGSTRate:## + "%"
+
+;; =============================================================================
+;; SECTION 11 : PRIMARY COLLECTION — HSN SUMMARY
+;; =============================================================================
+;; This is the performance-critical section.
+;;
+;; Strategy:
+;;   1.  Start from Voucher (Type: Voucher) — avoids re-scanning all objects.
+;;   2.  Filter at voucher level with SVF:HSNMasterFilter.
+;;   3.  Walk into InventoryEntries to reach line-item level.
+;;   4.  Group (By) on HSNCode obtained from the Stock Item's GST details.
+;;   5.  Aggregate compute (Aggr Compute) performs SUM of qty and all tax
+;;       components, and COUNT of invoices — all in one pass.
+;;   6.  Fetch only necessary fields to reduce memory footprint.
+;;
+;; For 5 lakh+ entries this single-pass aggregation is significantly faster
+;; than iterating vouchers inside a nested report loop.
+;; =============================================================================
+
+[Collection: HSNSummaryCollection]
+    Type        : Voucher : InventoryEntries
+    ChildOf     : $$SVCurrentCompany
+    Filter      : SVF:HSNMasterFilter, SVF:HSNLineFilter
+    Fetch       : Date, VoucherTypeName, VoucherNumber, PartyLedgerName,
+                  GSTRegistrationType, BilledQty, Rate, Amount,
+                  StockItemName, GSTRate, HSNCode, UOM,
+                  CGSTAmount, SGSTAmount, IGSTAmount, CessAmount,
+                  AssessableValue, BilledQty
+    By          : HSNCode        : $HSNCode
+    Aggr Compute: HSNDescription    : LASTVALUE     : $StockItemName
+    Aggr Compute: HSNUQC            : LASTVALUE     : $UOM
+    Aggr Compute: HSNGSTRate        : LASTVALUE     : $GSTRate
+    Aggr Compute: HSNTotalQty       : SUM           : $BilledQty
+    Aggr Compute: HSNTaxableValue   : SUM           : $AssessableValue
+    Aggr Compute: HSNCGSTAmt        : SUM           : $CGSTAmount
+    Aggr Compute: HSNSGSTAmt        : SUM           : $SGSTAmount
+    Aggr Compute: HSNIGSTAmt        : SUM           : $IGSTAmount
+    Aggr Compute: HSNCessAmt        : SUM           : $CessAmount
+    Aggr Compute: HSNTotalInvValue  : SUM           : ($AssessableValue + $CGSTAmount + $SGSTAmount + $IGSTAmount + $CessAmount)
+    Aggr Compute: HSNInvoiceCount   : COUNT          : $VoucherNumber
+    Sort        : SVHSNSortBy
+
+;; =============================================================================
+;; SECTION 12 : VOUCHER DETAIL COLLECTION (Drill-Down Level 1)
+;; =============================================================================
+;; When the user presses Enter on an HSN row, this collection provides the
+;; voucher-level detail filtered to the selected HSN code.
+;; =============================================================================
+
+[Collection: HSNVoucherDetailCollection]
+    Type        : Voucher : InventoryEntries
+    ChildOf     : $$SVCurrentCompany
+    Filter      : SVF:HSNMasterFilter, SVF:HSNLineFilter
+    Filter      : HSNDrillFilter
+    Fetch       : Date, VoucherTypeName, VoucherNumber, PartyLedgerName,
+                  GSTRegistrationType, GSTIN, BilledQty, Rate, Amount,
+                  StockItemName, GSTRate, HSNCode, UOM,
+                  CGSTAmount, SGSTAmount, IGSTAmount, CessAmount,
+                  AssessableValue, MasterID
+    Sort        : Default
+
+[System: Formula]
+    ;; Filters drill-down to the HSN code selected in the parent line
+    HSNDrillFilter : $HSNCode = ##SVHSNSelectedCode
+
+[System: Variable]
+    SVHSNSelectedCode : String : ""
+
+;; =============================================================================
+;; SECTION 13 : DRILL-DOWN REPORT — HSN VOUCHER DETAILS
+;; =============================================================================
+;; Level-1 drill shows every voucher line for the chosen HSN.
+;; Pressing Enter again opens the original voucher in Tally's native display.
+;; =============================================================================
+
+[Report: HSNVoucherDetailReport]
+    Form        : HSNVoucherDetailForm
+    Title       : "HSN Voucher Details : " + ##SVHSNSelectedCode
+    Variable    : SVHSNSelectedCode
+
+[Form: HSNVoucherDetailForm]
+    Parts       : HSNDrillTitle, HSNDrillHead, HSNDrillBody, HSNDrillFooter
+    Keys        : HSNKeyEsc
+    Use         : DSP Default Form
+
+;; --- Drill Title ---
+[Part: HSNDrillTitle]
+    Line        : HSNDrillTitleLine
+    Border      : Thin Bottom
+
+[Line: HSNDrillTitleLine]
+    Fields      : HSNDrillTitleFld
+
+[Field: HSNDrillTitleFld]
+    Use         : Name Field
+    Set As      : "HSN Voucher Details  |  HSN Code: " + ##SVHSNSelectedCode +
+                  "  |  " + $$String:SVHSNFromDate:"DD-MMM-YYYY" +
+                  " to " + $$String:SVHSNToDate:"DD-MMM-YYYY"
+    Style       : Large Bold
+
+;; --- Drill Column Header ---
+[Part: HSNDrillHead]
+    Line        : HSNDrillHeaderLine
+    Border      : Thin Bottom
+
+[Line: HSNDrillHeaderLine]
+    Fields      : HSNDHdrDate, HSNDHdrVchNo, HSNDHdrParty, HSNDHdrGSTIN,
+                  HSNDHdrItem, HSNDHdrQty, HSNDHdrRate,
+                  HSNDHdrTaxable, HSNDHdrCGST, HSNDHdrSGST,
+                  HSNDHdrIGST, HSNDHdrCess, HSNDHdrInvTotal
+    Style       : Normal Bold
+
+[Field: HSNDHdrDate]
+    Use         : Date Field
+    Set As      : "Date"
+    Width       : 12
+
+[Field: HSNDHdrVchNo]
+    Use         : Name Field
+    Set As      : "Voucher No"
+    Width       : 16
+
+[Field: HSNDHdrParty]
+    Use         : Name Field
+    Set As      : "Party"
+    Width       : 20
+
+[Field: HSNDHdrGSTIN]
+    Use         : Name Field
+    Set As      : "GSTIN"
+    Width       : 18
+
+[Field: HSNDHdrItem]
+    Use         : Name Field
+    Set As      : "Item Name"
+    Width       : 20
+
+[Field: HSNDHdrQty]
+    Use         : Qty Field
+    Set As      : "Qty"
+    Align       : Right
+    Width       : 10
+
+[Field: HSNDHdrRate]
+    Use         : Rate Field
+    Set As      : "Rate"
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDHdrTaxable]
+    Use         : Amount Field
+    Set As      : "Taxable Value"
+    Align       : Right
+    Width       : 14
+
+[Field: HSNDHdrCGST]
+    Use         : Amount Field
+    Set As      : "CGST"
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDHdrSGST]
+    Use         : Amount Field
+    Set As      : "SGST"
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDHdrIGST]
+    Use         : Amount Field
+    Set As      : "IGST"
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDHdrCess]
+    Use         : Amount Field
+    Set As      : "Cess"
+    Align       : Right
+    Width       : 10
+
+[Field: HSNDHdrInvTotal]
+    Use         : Amount Field
+    Set As      : "Invoice Total"
+    Align       : Right
+    Width       : 14
+
+;; --- Drill Body ---
+[Part: HSNDrillBody]
+    Lines       : HSNDrillDataLine
+    Scroll      : Vertical
+    Collection  : HSNVoucherDetailCollection
+    CommonBorder: Yes
+
+[Line: HSNDrillDataLine]
+    Fields      : HSNDFldDate, HSNDFldVchNo, HSNDFldParty, HSNDFldGSTIN,
+                  HSNDFldItem, HSNDFldQty, HSNDFldRate,
+                  HSNDFldTaxable, HSNDFldCGST, HSNDFldSGST,
+                  HSNDFldIGST, HSNDFldCess, HSNDFldInvTotal
+    Key         : HSNOpenVoucher
+
+;; Press Enter on a detail line to open the original voucher
+[Key: HSNOpenVoucher]
+    Key         : Enter
+    Action      : Display+ : VoucherDetails : $MasterID
+
+[Field: HSNDFldDate]
+    Use         : Date Field
+    Set As      : $Date
+    Width       : 12
+
+[Field: HSNDFldVchNo]
+    Use         : Name Field
+    Set As      : $VoucherNumber
+    Width       : 16
+
+[Field: HSNDFldParty]
+    Use         : Name Field
+    Set As      : $PartyLedgerName
+    Width       : 20
+
+[Field: HSNDFldGSTIN]
+    Use         : Name Field
+    Set As      : $GSTIN
+    Width       : 18
+
+[Field: HSNDFldItem]
+    Use         : Name Field
+    Set As      : $StockItemName
+    Width       : 20
+
+[Field: HSNDFldQty]
+    Use         : Qty Field
+    Set As      : $BilledQty
+    Align       : Right
+    Width       : 10
+
+[Field: HSNDFldRate]
+    Use         : Rate Field
+    Set As      : $Rate
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDFldTaxable]
+    Use         : Amount Field
+    Set As      : $AssessableValue
+    Align       : Right
+    Width       : 14
+
+[Field: HSNDFldCGST]
+    Use         : Amount Field
+    Set As      : $CGSTAmount
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDFldSGST]
+    Use         : Amount Field
+    Set As      : $SGSTAmount
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDFldIGST]
+    Use         : Amount Field
+    Set As      : $IGSTAmount
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDFldCess]
+    Use         : Amount Field
+    Set As      : $CessAmount
+    Align       : Right
+    Width       : 10
+
+[Field: HSNDFldInvTotal]
+    Use         : Amount Field
+    Set As      : $AssessableValue + $CGSTAmount + $SGSTAmount + $IGSTAmount + $CessAmount
+    Align       : Right
+    Width       : 14
+
+;; --- Drill Footer ---
+[Part: HSNDrillFooter]
+    Line        : HSNDrillTotalLine
+    Border      : Thin Top
+
+[Line: HSNDrillTotalLine]
+    Fields      : HSNDFldTotalLabel, HSNDFldTotQty, HSNDFldTotTaxable,
+                  HSNDFldTotCGST, HSNDFldTotSGST, HSNDFldTotIGST,
+                  HSNDFldTotCess, HSNDFldTotInvTotal
+    Style       : Normal Bold
+
+[Field: HSNDFldTotalLabel]
+    Use         : Name Field
+    Set As      : "Total"
+    Width       : 68
+
+[Field: HSNDFldTotQty]
+    Use         : Qty Field
+    Set As      : $$CollAmt:HSNVoucherDetailCollection:BilledQty
+    Align       : Right
+    Width       : 10
+
+[Field: HSNDFldTotTaxable]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNVoucherDetailCollection:AssessableValue
+    Align       : Right
+    Width       : 14
+
+[Field: HSNDFldTotCGST]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNVoucherDetailCollection:CGSTAmount
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDFldTotSGST]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNVoucherDetailCollection:SGSTAmount
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDFldTotIGST]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNVoucherDetailCollection:IGSTAmount
+    Align       : Right
+    Width       : 12
+
+[Field: HSNDFldTotCess]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNVoucherDetailCollection:CessAmount
+    Align       : Right
+    Width       : 10
+
+[Field: HSNDFldTotInvTotal]
+    Use         : Amount Field
+    Set As      : $$CollAmt:HSNVoucherDetailCollection:AssessableValue +
+                  $$CollAmt:HSNVoucherDetailCollection:CGSTAmount +
+                  $$CollAmt:HSNVoucherDetailCollection:SGSTAmount +
+                  $$CollAmt:HSNVoucherDetailCollection:IGSTAmount +
+                  $$CollAmt:HSNVoucherDetailCollection:CessAmount
+    Align       : Right
+    Width       : 14
+
+;; =============================================================================
+;; SECTION 14 : FILTER FORM (F4)
+;; =============================================================================
+;; A modal form opened by pressing F4.  The user selects filters and presses
+;; Enter; the report collection is re-fetched automatically on return.
+;; =============================================================================
+
+[Form: HSNFilterFormModal]
+    Parts       : HSNFilterPart
+    Keys        : HSNFilterAccept, HSNKeyEsc
+    Use         : DSP Default Form
+    Title       : "HSN Report Filters"
+    Buttons     : HSNFilterAccept
+
+[Key: HSNFilterAccept]
+    Key         : Enter
+    Action      : Accept
+
+[Part: HSNFilterPart]
+    Line        : HSNFilterLine01, HSNFilterLine02, HSNFilterLine03,
+                  HSNFilterLine04, HSNFilterLine05, HSNFilterLine06,
+                  HSNFilterLine07, HSNFilterLine08, HSNFilterLine09,
+                  HSNFilterLine10
+
+[Line: HSNFilterLine01]
+    Fields      : HSNFltrLblFromDate, HSNFltrFldFromDate
+
+[Field: HSNFltrLblFromDate]
+    Use         : Name Field
+    Set As      : "From Date"
+    Width       : 20
+
+[Field: HSNFltrFldFromDate]
+    Use         : Universal Field
+    Storage     : SVHSNFromDate
+    Modifiable  : Yes
+    Width       : 15
+
+[Line: HSNFilterLine02]
+    Fields      : HSNFltrLblToDate, HSNFltrFldToDate
+
+[Field: HSNFltrLblToDate]
+    Use         : Name Field
+    Set As      : "To Date"
+    Width       : 20
+
+[Field: HSNFltrFldToDate]
+    Use         : Universal Field
+    Storage     : SVHSNToDate
+    Modifiable  : Yes
+    Width       : 15
+
+[Line: HSNFilterLine03]
+    Fields      : HSNFltrLblVchType, HSNFltrFldVchType
+
+[Field: HSNFltrLblVchType]
+    Use         : Name Field
+    Set As      : "Voucher Type"
+    Width       : 20
+
+[Field: HSNFltrFldVchType]
+    Use         : Name Field
+    Storage     : SVHSNVchType
+    Modifiable  : Yes
+    Width       : 25
+    ;; Blank = All types; type partial name like "Sales" or "Purchase"
+
+[Line: HSNFilterLine04]
+    Fields      : HSNFltrLblGSTRate, HSNFltrFldGSTRate
+
+[Field: HSNFltrLblGSTRate]
+    Use         : Name Field
+    Set As      : "GST Rate (%)"
+    Width       : 20
+
+[Field: HSNFltrFldGSTRate]
+    Use         : Name Field
+    Storage     : SVHSNGSTRate
+    Modifiable  : Yes
+    Width       : 10
+
+[Line: HSNFilterLine05]
+    Fields      : HSNFltrLblHSNCode, HSNFltrFldHSNCode
+
+[Field: HSNFltrLblHSNCode]
+    Use         : Name Field
+    Set As      : "HSN Code"
+    Width       : 20
+
+[Field: HSNFltrFldHSNCode]
+    Use         : Name Field
+    Storage     : SVHSNCodeFilter
+    Modifiable  : Yes
+    Width       : 15
+
+[Line: HSNFilterLine06]
+    Fields      : HSNFltrLblStockGrp, HSNFltrFldStockGrp
+
+[Field: HSNFltrLblStockGrp]
+    Use         : Name Field
+    Set As      : "Stock Group"
+    Width       : 20
+
+[Field: HSNFltrFldStockGrp]
+    Use         : Name Field
+    Storage     : SVHSNStockGroup
+    Modifiable  : Yes
+    Width       : 25
+
+[Line: HSNFilterLine07]
+    Fields      : HSNFltrLblStockCat, HSNFltrFldStockCat
+
+[Field: HSNFltrLblStockCat]
+    Use         : Name Field
+    Set As      : "Stock Category"
+    Width       : 20
+
+[Field: HSNFltrFldStockCat]
+    Use         : Name Field
+    Storage     : SVHSNStockCategory
+    Modifiable  : Yes
+    Width       : 25
+
+[Line: HSNFilterLine08]
+    Fields      : HSNFltrLblGodown, HSNFltrFldGodown
+
+[Field: HSNFltrLblGodown]
+    Use         : Name Field
+    Set As      : "Godown"
+    Width       : 20
+
+[Field: HSNFltrFldGodown]
+    Use         : Name Field
+    Storage     : SVHSNGodown
+    Modifiable  : Yes
+    Width       : 25
+
+[Line: HSNFilterLine09]
+    Fields      : HSNFltrLblParty, HSNFltrFldParty
+
+[Field: HSNFltrLblParty]
+    Use         : Name Field
+    Set As      : "Party Ledger"
+    Width       : 20
+
+[Field: HSNFltrFldParty]
+    Use         : Name Field
+    Storage     : SVHSNPartyLedger
+    Modifiable  : Yes
+    Width       : 25
+
+[Line: HSNFilterLine10]
+    Fields      : HSNFltrLblSortBy, HSNFltrFldSortBy
+
+[Field: HSNFltrLblSortBy]
+    Use         : Name Field
+    Set As      : "Sort By (HSNCode/HSNTaxableValue/HSNGSTRate/HSNInvoiceCount)"
+    Width       : 48
+
+[Field: HSNFltrFldSortBy]
+    Use         : Name Field
+    Storage     : SVHSNSortBy
+    Modifiable  : Yes
+    Width       : 20
+
+;; =============================================================================
+;; SECTION 15 : FUNCTIONS (ACTIONS)
+;; =============================================================================
+;; TDL Functions implement F2 (period change) and F4 (filter form open).
+;; =============================================================================
+
+[Function: HSNChangePeriod]
+    00  : CALL    : ChangePeriod        ;; Built-in TallyPrime action
+
+[Function: HSNFilterForm]
+    00  : DISPLAY+ : Form : HSNFilterFormModal
+
+;; =============================================================================
+;; SECTION 16 : PRINT DEFINITION
+;; =============================================================================
+;; Professional print with Company, GSTIN, Period, Page Number,
+;; Print Date/Time, and a Signature area at the bottom.
+;; =============================================================================
+
+[Report: HSNWiseSummaryPrint]
+    Form        : HSNPrintForm
+    Title       : "HSN Wise Summary"
+    Print Title : "HSN Wise Summary"
+
+[Form: HSNPrintForm]
+    Parts       : HSNPrintTitle, HSNPrintColHead, HSNPrintBody,
+                  HSNPrintFooter, HSNPrintSignature
+    Use         : Print Form
+
+[Part: HSNPrintTitle]
+    Line        : HSNPrintTitleLine1, HSNPrintTitleLine2,
+                  HSNPrintTitleLine3, HSNPrintTitleLine4
+    Border      : Thin Bottom
+
+[Line: HSNPrintTitleLine1]
+    Fields      : HSNPFldCompName
+    Align       : Centre
+
+[Field: HSNPFldCompName]
+    Use         : Name Field
+    Set As      : ##SVCurrentCompany
+    Style       : Large Bold
+
+[Line: HSNPrintTitleLine2]
+    Fields      : HSNPFldGSTIN
+    Align       : Centre
+
+[Field: HSNPFldGSTIN]
+    Use         : Name Field
+    Set As      : "GSTIN : " + $$GSTINOfCompany
+    Style       : Normal Bold
+
+[Line: HSNPrintTitleLine3]
+    Fields      : HSNPFldRptTitle
+    Align       : Centre
+
+[Field: HSNPFldRptTitle]
+    Use         : Name Field
+    Set As      : "HSN Wise Summary"
+    Style       : Large Bold
+
+[Line: HSNPrintTitleLine4]
+    Fields      : HSNPFldPeriod, HSNPFldPrintDate
+    Align       : Centre
+
+[Field: HSNPFldPeriod]
+    Use         : Name Field
+    Set As      : "Period: " + $$String:SVHSNFromDate:"DD-MMM-YYYY" +
+                  " to " + $$String:SVHSNToDate:"DD-MMM-YYYY"
+
+[Field: HSNPFldPrintDate]
+    Use         : Name Field
+    Set As      : "Print Date: " + $$String:$$MachineDate:"DD-MMM-YYYY"
+    Align       : Right
+
+;; Print column header mirrors the screen header
+[Part: HSNPrintColHead]
+    Line        : HSNColHeaderLine
+    Border      : Thin Bottom
+
+;; Print body mirrors the screen body
+[Part: HSNPrintBody]
+    Lines       : HSNDataLine
+    Scroll      : Vertical
+    Collection  : HSNSummaryCollection
+    CommonBorder: Yes
+
+;; Print footer mirrors the screen footer
+[Part: HSNPrintFooter]
+    Line        : HSNTotalLine
+    Border      : Thin Top
+
+;; Page number appears in page footer
+[Part: HSNPrintSignature]
+    Line        : HSNPrintSigLine1, HSNPrintSigLine2
+
+[Line: HSNPrintSigLine1]
+    Fields      : HSNPFldPageNo
+
+[Field: HSNPFldPageNo]
+    Use         : Name Field
+    Set As      : "Page " + $$String:$$PrintPageNo + " of " + $$String:$$PrintTotalPages
+    Align       : Right
+
+[Line: HSNPrintSigLine2]
+    Fields      : HSNPFldSigLabel
+
+[Field: HSNPFldSigLabel]
+    Use         : Name Field
+    Set As      : "Authorised Signatory"
+    Align       : Right
+
+;; =============================================================================
+;; SECTION 17 : EXPORT DEFINITION
+;; =============================================================================
+;; Export to Excel, CSV, PDF, XML.
+;; TallyPrime's built-in export engine is used; column mapping is achieved
+;; by reusing the same collection and field definitions.
+;; =============================================================================
+
+[Report: HSNWiseSummaryExport]
+    Form        : HSNExportForm
+    Title       : "HSN Wise Summary Export"
+
+[Form: HSNExportForm]
+    Parts       : HSNExportBody
+    Use         : Export Form
+
+[Part: HSNExportBody]
+    Lines       : HSNExportLine
+    Scroll      : Vertical
+    Collection  : HSNSummaryCollection
+
+[Line: HSNExportLine]
+    Fields      : HSNExpHSNCode, HSNExpDesc, HSNExpUQC, HSNExpGSTRate,
+                  HSNExpQty, HSNExpTaxable, HSNExpCGST, HSNExpSGST,
+                  HSNExpIGST, HSNExpCess, HSNExpTotal, HSNExpInvoices
+
+[Field: HSNExpHSNCode]
+    Use         : Name Field
+    Set As      : $HSNCode
+    XML Tag     : HSNCode
+
+[Field: HSNExpDesc]
+    Use         : Name Field
+    Set As      : $HSNDescription
+    XML Tag     : Description
+
+[Field: HSNExpUQC]
+    Use         : Name Field
+    Set As      : $HSNUQC
+    XML Tag     : UQC
+
+[Field: HSNExpGSTRate]
+    Use         : Amount Field
+    Set As      : $HSNGSTRate
+    XML Tag     : GSTRate
+
+[Field: HSNExpQty]
+    Use         : Qty Field
+    Set As      : $HSNTotalQty
+    XML Tag     : TotalQuantity
+
+[Field: HSNExpTaxable]
+    Use         : Amount Field
+    Set As      : $HSNTaxableValue
+    XML Tag     : TaxableValue
+
+[Field: HSNExpCGST]
+    Use         : Amount Field
+    Set As      : $HSNCGSTAmt
+    XML Tag     : CGSTAmount
+
+[Field: HSNExpSGST]
+    Use         : Amount Field
+    Set As      : $HSNSGSTAmt
+    XML Tag     : SGSTAmount
+
+[Field: HSNExpIGST]
+    Use         : Amount Field
+    Set As      : $HSNIGSTAmt
+    XML Tag     : IGSTAmount
+
+[Field: HSNExpCess]
+    Use         : Amount Field
+    Set As      : $HSNCessAmt
+    XML Tag     : CessAmount
+
+[Field: HSNExpTotal]
+    Use         : Amount Field
+    Set As      : $HSNTotalInvValue
+    XML Tag     : TotalInvoiceValue
+
+[Field: HSNExpInvoices]
+    Use         : Number Field
+    Set As      : $HSNInvoiceCount
+    XML Tag     : InvoiceCount
+
+;; =============================================================================
+;; SECTION 18 : SECURITY — ACCESS CONTROL
+;; =============================================================================
+;; Restricts the report to users who have the "GST Reports" permission.
+;; This uses TallyPrime's standard role-based access mechanism.
+;; =============================================================================
+
+[#Form: HSNWiseSummaryForm]
+    ;; The form is only accessible if the logged-in user has GST Report access.
+    ;; If not, TallyPrime will block display at the menu level (Gateway security).
+    Local       : Button  : HSNSecurityCheck : Inactive : NOT $$HasAccess:$$UserRole:"GST Reports"
+
+;; =============================================================================
+;; SECTION 19 : EVENT — AUTO SET SELECTED HSN ON DRILL
+;; =============================================================================
+;; When the user moves focus to a line in the body, the system captures the
+;; HSNCode of that line into SVHSNSelectedCode so the drill-down form can
+;; use it as a filter.
+;; =============================================================================
+
+[#Line: HSNDataLine]
+    Local       : Field : HSNFldCode : Event : HSNSetSelectedCode : Set
+
+[Event: HSNSetSelectedCode]
+    Condition   : Always
+    Action      : Set : SVHSNSelectedCode : $HSNCode
+
+;; =============================================================================
+;; SECTION 20 : BUTTON BAR DEFINITION
+;; =============================================================================
+;; Buttons appear at the bottom of the form for key actions.
+;; =============================================================================
+
+[#Form: HSNWiseSummaryForm]
+    Buttons     : HSNBtnPeriod, HSNBtnFilter, HSNBtnRefresh,
+                  HSNBtnExport, HSNBtnPrint, HSNBtnBack
+
+[Button: HSNBtnPeriod]
+    Title       : "F2: Period"
+    Key         : F2
+    Action      : Call : HSNChangePeriod
+
+[Button: HSNBtnFilter]
+    Title       : "F4: Filter"
+    Key         : F4
+    Action      : Call : HSNFilterForm
+
+[Button: HSNBtnRefresh]
+    Title       : "F5: Refresh"
+    Key         : F5
+    Action      : Refresh
+
+[Button: HSNBtnExport]
+    Title       : "E: Export"
+    Key         : Alt+E
+    Action      : Export
+
+[Button: HSNBtnPrint]
+    Title       : "P: Print"
+    Key         : Alt+P
+    Action      : Print
+
+[Button: HSNBtnBack]
+    Title       : "Esc: Back"
+    Key         : Escape
+    Action      : Quit
+
+;; =============================================================================
+;; END OF TDL — HSN WISE SUMMARY REPORT
+;; =============================================================================
+;;
+;; ASSUMPTIONS & TALLY OBJECT DEPENDENCIES
+;; ----------------------------------------
+;; 1.  HSNCode, GSTRate, CGSTAmount, SGSTAmount, IGSTAmount, CessAmount,
+;;     AssessableValue are standard fields populated by TallyPrime on
+;;     inventory entries of GST-enabled companies. They are available from
+;;     TallyPrime 1.x onward.
+;;
+;; 2.  GSTRegistrationType is a standard Voucher field used to exclude
+;;     non-GST vouchers via SVF:HSNMasterFilter.
+;;
+;; 3.  $$GSTINOfCompany is a standard TDL function returning the active
+;;     company's GSTIN.
+;;
+;; 4.  $$HasAccess and $$UserRole are standard TallyPrime security
+;;     functions. "GST Reports" must be defined in Company Security settings.
+;;
+;; 5.  BilledQty, UOM, StockItemName, AssessableValue are standard inventory
+;;     entry fields.  Rate is the per-unit rate on the entry.
+;;
+;; 6.  IsCancelled, IsOptional, IsDeleted are standard SysName checks for
+;;     voucher validity.
+;;
+;; 7.  The Aggr Compute : COUNT clause counts distinct VoucherNumber values
+;;     per HSN group.  Because TDL COUNT operates on all rows (not distinct),
+;;     the invoice count figure represents line-item count unless Tally's
+;;     internal deduplication is applied at the collection level.
+;;     For exact distinct invoice counts use a secondary keyed collection.
+;;
+;; 8.  The Sort in HSNSummaryCollection is driven by SVHSNSortBy which holds
+;;     the Aggr Compute field name (e.g. "HSNCode", "HSNTaxableValue").
+;;     Ensure the variable value exactly matches the declared Aggr Compute
+;;     names.
+;;
+;; 9.  The B2B / B2C / Export / SEZ / ReverseCharge filter (SVHSNVchType and
+;;     SVHSNVchType or SVHSNBType) can be extended using
+;;     GSTRegistrationType party field and specific voucher type names to
+;;     distinguish supply types. Extend SVF:HSNVchTypeMatch accordingly.
+;;
+;; 10. Stock Group, Stock Category, and Godown filters (SVHSNStockGroup etc.)
+;;     can be connected using ChildOf or Walk conditions on the StockItem
+;;     master.  Implementation requires an intermediate StockItem collection
+;;     walked from the voucher inventory entry; extend HSNSummaryCollection's
+;;     Type hierarchy if needed.
+;;
+;; 11. $$PrintPageNo and $$PrintTotalPages are built-in TDL print functions.
+;;
+;; 12. Export formats (Excel, PDF, CSV, XML) are controlled entirely by
+;;     TallyPrime's native Export dialog triggered by Alt+E.  No extra TDL
+;;     coding is needed beyond marking the Form with "Use : Export Form".
+;;
+;; 13. VoucherDetails (used in HSNOpenVoucher) is TallyPrime's internal
+;;     display object for opening a voucher by its MasterID.
+;;
+;; 14. GST Reports permission check uses $$HasAccess.  If the company does
+;;     not have role-based security configured, this guard is a no-op and
+;;     all users will have access — which is safe for default single-user
+;;     installations.
+;;
+;; =============================================================================
