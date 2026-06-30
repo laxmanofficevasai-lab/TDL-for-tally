@@ -82,12 +82,9 @@
 [#Menu: Gateway of Tally]
     Add : Key Item : HSN Wise Summary  : H : DISPLAY+ : Form : HSNWiseSummaryForm
 
-[#Menu: Display More Reports]
-    Add : Key Item : HSN Wise Summary  : H : DISPLAY+ : Form : HSNWiseSummaryForm
-
-;; Also add under GST Reports menu if present
-[#Menu: GST Reports]
-    Add : Key Item : HSN Wise Summary  : H : DISPLAY+ : Form : HSNWiseSummaryForm
+;; "Display More Reports" and "GST Reports" are UI screens, not named TDL Menu
+;; objects in TallyPrime, so they cannot be extended with [#Menu:].
+;; The report is accessible from Gateway of Tally above.
 
 ;; =============================================================================
 ;; SECTION 4 : REPORT DEFINITION
